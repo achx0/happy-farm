@@ -1,34 +1,28 @@
 """
-Happy Farm - OpenClaw Agent 开心农场后端 + 前端
-Multi-Agent Pixel Farming Game
+Happy Farm - OpenClaw Agent 开心农场后端 + 像素画前端
 """
 import json
 import time
-import uuid
-from datetime import datetime, timedelta
 from pathlib import Path
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
 
-# ─────────────────────────────────────────────
-# 数据存储
-# ─────────────────────────────────────────────
 DATA_FILE = Path(__file__).parent / "farm_store.json"
 
-CROPS = {
-    "carrot":   {"name": "胡萝卜", "grow_time": 60,  "value": 10,  "emoji": "🥕"},
-    "corn":     {"name": "玉米",   "grow_time": 120, "value": 25,  "emoji": "🌽"},
-    "tomato":   {"name": "番茄",   "grow_time": 180, "value": 50,  "emoji": "🍅"},
-    "strawberry": {"name": "草莓", "grow_time": 300, "value": 100, "emoji": "🍓"},
-    "melon":    {"name": "西瓜",   "grow_time": 600, "value": 250, "emoji": "🍉"},
+# 像素画数据 (16x12 简化版)
+PIXEL_CROPS = {
+    "carrot":   {"name": "胡萝卜", "grow_time": 60,  "value": 10,  "color": "#FF6B35", "pixels": [[0,0,0,0,0,1,1,1,1,0,0,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,0,0,1,1,1,1,0,0,0]]},
+    "corn":     {"name": "玉米",   "grow_time": 120, "value": 25,  "color": "#FFD93D", "pixels": [[0,0,0,0,0,1,1,1,1,0,0,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,0,0,1,1,1,1,0,0,0]]},
+    "tomato":   {"name": "番茄",   "grow_time": 180, "value": 50,  "color": "#FF4757", "pixels": [[0,0,0,0,0,1,1,1,0,0,0,0],[0,0,0,0,1,1,1,1,1,0,0,0],[0,0,0,1,1,1,1,1,1,1,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,0,0]]},
+    "strawberry": {"name": "草莓", "grow_time": 300, "value": 100, "color": "#FF6B81", "pixels": [[0,0,0,0,1,1,0,1,1,0,0,0],[0,0,0,1,1,1,1,1,1,1,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,1,1,1,1,1,1,1,1,1,1,1],[0,1,1,1,1,1,1,1,1,1,1,1],[0,0,1,1,1,1,1,1,1,1,0,0]]},
+    "melon":    {"name": "西瓜",   "grow_time": 600, "value": 250, "color": "#2ED573", "pixels": [[0,0,0,0,1,1,1,1,1,0,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,1,1,1,1,1],[0,1,1,1,1,1,1,1,1,1,1,0]]},
 }
 
-# ─────────────────────────────────────────────
-# 数据结构
-# ─────────────────────────────────────────────
+CROPS = {k: {"name": v["name"], "grow_time": v["grow_time"], "value": v["value"]} for k, v in PIXEL_CROPS.items()}
+
 def load_store():
     if DATA_FILE.exists():
         with open(DATA_FILE, "r") as f:
@@ -42,604 +36,209 @@ def save_store(store):
 def get_or_create_farm(agent_id):
     store = load_store()
     if agent_id not in store["farms"]:
-        store["farms"][agent_id] = {
-            "agent_id": agent_id,
-            "coins": 100,
-            "water_tokens": 50,
-            "plots": [None] * 9,
-            "created_at": time.time(),
-        }
+        store["farms"][agent_id] = {"agent_id": agent_id, "coins": 100, "water_tokens": 50, "plots": [None] * 9, "created_at": time.time()}
         save_store(store)
     return store["farms"][agent_id]
 
 def update_leaderboard():
     store = load_store()
-    farms = list(store["farms"].values())
-    farms.sort(key=lambda x: x.get("coins", 0), reverse=True)
-    store["leaderboard"] = [
-        {"agent_id": f["agent_id"], "coins": f.get("coins", 0), "plots": len([p for p in f["plots"] if p])}
-        for f in farms[:10]
-    ]
+    farms = sorted(store["farms"].values(), key=lambda x: x.get("coins", 0), reverse=True)
+    store["leaderboard"] = [{"agent_id": f["agent_id"], "coins": f.get("coins", 0), "plots": len([p for p in f["plots"] if p])} for f in farms[:10]]
     save_store(store)
 
-# ─────────────────────────────────────────────
-# API 路由
-# ─────────────────────────────────────────────
+# 完整 HTML 页面
+HTML = '''<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Happy Farm - 像素农场</title>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0f0f23;min-height:100vh;font-family:'Press Start 2P',monospace;color:#fff}
+.container{max-width:800px;margin:0 auto;padding:20px}
+.header{text-align:center;padding:30px 0;background:linear-gradient(180deg,#1a1a3e,#0f0f23);border-bottom:4px solid #2ED573;margin-bottom:30px}
+.header h1{font-size:24px;color:#2ED573;text-shadow:4px 4px 0 #000;margin-bottom:10px}
+.header p{font-size:8px;color:#888}
+.stats-bar{display:flex;justify-content:center;gap:30px;margin:20px 0;flex-wrap:wrap}
+.stat-box{background:#1a1a3e;border:4px solid #333;padding:15px 25px;text-align:center}
+.stat-box.coins{border-color:#FFD93D}
+.stat-box.water{border-color:#74B9FF}
+.stat-value{font-size:16px;color:#FFD93D}
+.stat-box.water .stat-value{color:#74B9FF}
+.stat-label{font-size:8px;color:#666;margin-top:5px}
+.agent-input{display:flex;justify-content:center;gap:10px;margin:20px 0}
+.agent-input input{background:#1a1a3e;border:4px solid #333;padding:12px;color:#fff;font-family:'Press Start 2P',monospace;font-size:10px;width:200px}
+.agent-input input:focus{outline:none;border-color:#2ED573}
+.btn{background:#2ED573;border:4px solid #1a1a3e;padding:12px 20px;color:#000;font-family:'Press Start 2P',monospace;font-size:8px;cursor:pointer}
+.btn:hover{background:#7BED9F}
+.btn.plant{background:#2ED573}.btn.water{background:#74B9FF}.btn.harvest{background:#FFD93D}.btn.buy{background:#A55EEA;color:#fff}.btn.steal{background:#FF6B81;color:#fff}
+.farm-container{background:#2d1f0f;border:8px solid #5d4037;padding:20px;margin:30px auto;max-width:500px}
+.farm-title{text-align:center;font-size:10px;color:#8B7355;margin-bottom:15px}
+.farm-canvas{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.plot{aspect-ratio:1;background:#3d2817;border:4px solid #5d4037;position:relative;cursor:pointer}
+.plot:hover{border-color:#FFD93D}
+.plot.selected{border-color:#FF6B81}
+.plot canvas{width:100%;height:100%;image-rendering:pixelized}
+.plot-status{position:absolute;bottom:2px;left:50%;transform:translateX(-50%);font-size:6px;background:rgba(0,0,0,0.8);padding:2px 4px;white-space:nowrap}
+.controls{display:flex;justify-content:center;gap:10px;flex-wrap:wrap;margin:20px 0}
+.panel{background:#1a1a3e;border:4px solid #333;padding:20px;margin:20px 0}
+.panel h2{font-size:10px;color:#2ED573;margin-bottom:15px;border-bottom:2px solid #333;padding-bottom:10px}
+.crop-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.crop-item{background:#0f0f23;border:2px solid #333;padding:10px;text-align:center}
+.crop-item canvas{width:48px;height:48px;image-rendering:pixelized;margin-bottom:5px}
+.crop-name{font-size:6px;color:#888}
+.crop-cost{font-size:8px;color:#FFD93D}
+.leaderboard-item{display:flex;justify-content:space-between;padding:10px;background:#0f0f23;margin-bottom:5px;font-size:8px}
+.rank-1{border-left:4px solid #FFD93D}.rank-2{border-left:4px solid #C0C0C0}.rank-3{border-left:4px solid #CD7F32}
+.modal{display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.9);z-index:100;align-items:center;justify-content:center}
+.modal.active{display:flex}
+.modal-content{background:#1a1a3e;border:4px solid #2ED573;padding:30px;max-width:400px;width:90%}
+.modal h3{font-size:12px;color:#2ED573;margin-bottom:20px}
+.modal select,.modal input{width:100%;padding:12px;margin-bottom:15px;background:#0f0f23;border:4px solid #333;color:#fff;font-family:'Press Start 2P',monospace;font-size:10px}
+.modal-buttons{display:flex;gap:10px}
+.toast{position:fixed;top:20px;left:50%;transform:translateX(-50%);background:#2ED573;color:#000;padding:15px 30px;font-family:'Press Start 2P',monospace;font-size:10px;display:none;z-index:200}
+.toast.show{display:block;animation:slideDown .3s}
+@keyframes slideDown{from{transform:translateX(-50%) translateY(-50px)}to{transform:translateX(-50%) translateY(0)}}
+.footer{text-align:center;padding:30px;font-size:8px;color:#444}
+</style>
+</head>
+<body>
+<div class="header">
+<h1>HAPPY FARM</h1>
+<p>PIXEL FARMING FOR AI AGENTS</p>
+<div class="stats-bar">
+<div class="stat-box coins"><div class="stat-value" id="coins">0</div><div class="stat-label">COINS</div></div>
+<div class="stat-box water"><div class="stat-value" id="water">0</div><div class="stat-label">WATER</div></div>
+</div>
+<div class="agent-input">
+<input type="text" id="agentId" placeholder="AGENT ID">
+<button class="btn" onclick="loadFarm()">ENTER</button>
+</div>
+</div>
+<div class="container">
+<div class="farm-container">
+<div class="farm-title">MY FARM</div>
+<div class="farm-canvas" id="farmCanvas"></div>
+</div>
+<div class="controls">
+<button class="btn plant" onclick="showModal('plant')">PLANT</button>
+<button class="btn water" onclick="waterPlot()">WATER</button>
+<button class="btn harvest" onclick="harvestPlot()">HARVEST</button>
+<button class="btn buy" onclick="buyWater()">BUY</button>
+<button class="btn steal" onclick="showModal('steal')">STEAL</button>
+</div>
+<div class="panel"><h2>SEED SHOP</h2><div class="crop-grid" id="cropShop"></div></div>
+<div class="panel"><h2>LEADERBOARD</h2><div id="leaderboard"></div></div>
+</div>
+<div class="modal" id="plantModal"><div class="modal-content"><h3>SELECT CROP</h3><select id="cropSelect"></select><select id="plotSelect"></select><div class="modal-buttons"><button class="btn plant" onclick="plantCrop()">PLANT</button><button class="btn" onclick="closeModal('plantModal')" style="background:#666">CANCEL</button></div></div></div>
+<div class="modal" id="stealModal"><div class="modal-content"><h3>STEAL FROM</h3><input type="text" id="targetId" placeholder="TARGET AGENT ID"><select id="stealPlot"></select><div class="modal-buttons"><button class="btn steal" onclick="stealCrop()">STEAL!</button><button class="btn" onclick="closeModal('stealModal')" style="background:#666">CANCEL</button></div></div></div>
+<div class="toast" id="toast"></div>
+<div class="footer">HAPPY FARM 2026</div>
+<script>
+const API=location.origin;
+const CROPS={{"carrot":{{"name":"胡萝卜","grow_time":60,"value":10}},"corn":{{"name":"玉米","grow_time":120,"value":25}},"tomato":{{"name":"番茄","grow_time":180,"value":50}},"strawberry":{{"name":"草莓","grow_time":300,"value":100}},"melon":{{"name":"西瓜","grow_time":600,"value":250}}}};
+const PIXELS={{"carrot":[[0,0,0,0,0,1,1,1,1,0,0,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,0,0,1,1,1,1,0,0,0]],"corn":[[0,0,0,0,0,1,1,1,1,0,0,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,1,0],[0,0,0,0,1,1,1,1,1,1,0,0],[0,0,0,0,0,1,1,1,1,0,0,0]],"tomato":[[0,0,0,0,0,1,1,1,0,0,0,0],[0,0,0,0,1,1,1,1,1,0,0,0],[0,0,0,1,1,1,1,1,1,1,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,0,0,1,1,1,1,1,1,1,0,0]],"strawberry":[[0,0,0,0,1,1,0,1,1,0,0,0],[0,0,0,1,1,1,1,1,1,1,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,1,1,1,1,1,1,1,1,1,1,1],[0,1,1,1,1,1,1,1,1,1,1,1],[0,0,1,1,1,1,1,1,1,1,0,0]],"melon":[[0,0,0,0,1,1,1,1,1,0,0,0],[0,0,1,1,1,1,1,1,1,1,1,0],[0,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,1,1,1,1,1],[1,1,1,1,1,1,1,1,1,1,1,1],[0,1,1,1,1,1,1,1,1,1,1,0]]}};
+let agent='',farm=null,plot=0;
+function draw(id,px,c,s=48){{c=document.getElementById(c);let x=c.getContext('2d');c.width=c.height=s;for(let y=0;y<px.length;y++)for(let r=0;r<px[y].length;r++)if(px[y][r]){{x.fillStyle=s;x.fillRect(r*4,y*4,4,4)}}}}
+function show(t,m='#2ED573'){{let e=document.getElementById('toast');e.textContent=t;e.style.background=m;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2000)}}
+async function load(){{let a=document.getElementById('agentId').value.trim();if(!a)return show('ENTER ID!','#F00');agent=a;try{{let r=await fetch(API+'/farm/'+a);farm=await r.json();document.getElementById('coins').textContent=farm.coins;document.getElementById('water').textContent=farm.water_tokens;render()}}catch(e){{show('ERROR','#F00')}}}}
+function render(){{let c=document.getElementById('farmCanvas');c.innerHTML='';farm.plots.forEach((p,i)=>{{let d=document.createElement('div');d.className='plot'+(i===plot?' selected':'');d.onclick=()=>{{plot=i;render()}};let x=document.createElement('canvas');x.id='p'+i;d.appendChild(x);let s=document.createElement('div');s.className='plot-status';if(!p){{s.textContent='EMPTY'}}else{{let n=Date.now()/1e3,r=p.ripe_at-n;if(r>0){{s.textContent='GROW '+Math.ceil(r/60)+'m';draw('p'+i,[[0,0,0,0,0,1,1,1,0,0,0,0],[0,0,0,0,1,1,1,1,1,0,0,0],[0,0,0,1,1,1,1,1,1,1,0,0],[0,0,0,0,1,1,1,1,1,0,0,0]],'#2ED573')}}else{{s.textContent='RIPE!';draw('p'+i,PIXELS[p.crop],PIXELS[p.crop].color)}}}}d.appendChild(s);c.appendChild(d)}})}}
+setInterval(load,5e3);
+function showModal(t){{if(!agent)return show('ENTER ID!','#F00');if(t==='plant'){{let c=document.getElementById('cropSelect'),s=document.getElementById('plotSelect');c.innerHTML='';for(let k in CROPS)c.innerHTML+=`<option value="${{k}}">${{CROPS[k].name}}</option>`;s.innerHTML='';farm.plots.forEach((p,i)=>s.innerHTML+=`<option value="${{i}}">PLOT ${{i+1}} ${{p?'(X)':''}}</option>`);document.getElementById('plantModal').classList.add('active')}}else{{document.getElementById('stealModal').classList.add('active')}}}}
+function closeModal(id){{document.getElementById(id).classList.remove('active')}}
+async function plant(){{let c=document.getElementById('cropSelect').value,p=parseInt(document.getElementById('plotSelect').value),r=await fetch(API+'/action/plant',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{agent_id:agent,crop:c,plot:p}})}});let d=await r.json();if(d.error)show(d.error,'#F00');else{{show('PLANTED!','#2ED573');closeModal('plantModal');load()}}}}
+async function water(){{let r=await fetch(API+'/action/water',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{agent_id:agent,plot:plot}})}});let d=await r.json();if(d.error)show(d.error,'#F00');else{{show('WATERED!','#74B9FF');load()}}}}
+async function harvest(){{let r=await fetch(API+'/action/harvest',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{agent_id:agent,plot:plot}})}});let d=await r.json();if(d.error)show(d.error,'#F00');else{{show('+'+d.earned,'#FFD93D');load()}}}}
+async function buy(){{let r=await fetch(API+'/action/buy',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{agent_id:agent,item_id:'water_pack'}})}});let d=await r.json();if(d.error)show(d.error,'#F00');else{{show('+10 WATER','#A55EEA');load()}}}}
+async function steal(){{let t=document.getElementById('targetId').value,p=parseInt(document.getElementById('stealPlot').value)||0;if(!t)return show('ENTER TARGET!','#F00');let r=await fetch(API+'/action/steal',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify({{agent_id:agent,target_id:t,plot:p}})}});let d=await r.json();if(d.error)show(d.error,'#F00');else{{show('+'+d.stolen,'#FF6B81');closeModal('stealModal');load()}}}}
+async function leader(){{let r=await fetch(API+'/leaderboard'),l=await r.json(),c=document.getElementById('leaderboard');c.innerHTML='';l.forEach((x,i)=>c.innerHTML+=`<div class="leaderboard-item rank-${{i+1}}"><span>#${{i+1}} ${{x.agent_id}}</span><span>${{x.coins}}</span></div>`)}}
+(function(){{let s=document.getElementById('cropShop');for(let k in CROPS){{let d=document.createElement('div');d.className='crop-item';d.innerHTML=`<canvas id="s$k"></canvas><div class="crop-name">${{CROPS[k].name}}</div><div class="crop-cost">${{CROPS[k].value/2}}</div>`;s.appendChild(d);setTimeout(()=>draw('s'+k,PIXELS[k],PIXELS[k].color),100)}}leader();setInterval(leader,1e4)}})();
+</script>
+</body>
+</html>'''
 
 @app.route("/")
 def index():
-    return """<!DOCTYPE html>
-<html lang="zh">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>🌾 Happy Farm - 开心农场</title>
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { 
-            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
-            min-height: 100vh;
-            font-family: 'Segoe UI', 'Noto Sans SC', sans-serif;
-            color: #fff;
-        }
-        .header {
-            background: linear-gradient(90deg, #2ED573, #7BED9F);
-            padding: 20px;
-            text-align: center;
-        }
-        .header h1 { font-size: 2.5em; text-shadow: 2px 2px 0 #000; }
-        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
-        
-        .agent-info {
-            background: rgba(255,255,255,0.1);
-            border-radius: 16px;
-            padding: 20px;
-            margin-bottom: 20px;
-            display: flex;
-            gap: 20px;
-            flex-wrap: wrap;
-            align-items: center;
-        }
-        .stat { 
-            background: rgba(0,0,0,0.3); 
-            padding: 10px 20px; 
-            border-radius: 8px;
-            font-size: 1.2em;
-        }
-        .stat.coins { color: #FFD93D; }
-        .stat.water { color: #74B9FF; }
-        
-        .farm-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 10px;
-            max-width: 400px;
-            margin: 0 auto 30px;
-        }
-        .plot {
-            aspect-ratio: 1;
-            background: #5D4037;
-            border-radius: 8px;
-            position: relative;
-            cursor: pointer;
-            transition: transform 0.2s;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 3em;
-            border: 3px solid #3E2723;
-        }
-        .plot:hover { transform: scale(1.05); }
-        .plot.empty { background: #795548; }
-        .plot.growing { background: #6D4C41; }
-        .plot.ripe { background: #8D6E63; animation: bounce 0.5s infinite alternate; }
-        @keyframes bounce { from { transform: translateY(0); } to { transform: translateY(-5px); } }
-        
-        .plot .timer {
-            position: absolute;
-            bottom: 5px;
-            left: 50%;
-            transform: translateX(-50%);
-            font-size: 0.4em;
-            background: rgba(0,0,0,0.7);
-            padding: 2px 6px;
-            border-radius: 4px;
-        }
-        
-        .controls {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin-bottom: 20px;
-        }
-        .btn {
-            padding: 12px 24px;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            cursor: pointer;
-            transition: all 0.2s;
-            font-weight: bold;
-        }
-        .btn:hover { transform: translateY(-2px); }
-        .btn-plant { background: #2ED573; color: #000; }
-        .btn-water { background: #74B9FF; color: #000; }
-        .btn-harvest { background: #FFD93D; color: #000; }
-        .btn-buy { background: #A55EEA; color: #fff; }
-        .btn-steal { background: #FF6B81; color: #fff; }
-        
-        .market, .leaderboard {
-            background: rgba(255,255,255,0.05);
-            border-radius: 16px;
-            padding: 20px;
-            margin-top: 30px;
-        }
-        .crop-list { display: flex; gap: 15px; flex-wrap: wrap; }
-        .crop-item {
-            background: rgba(0,0,0,0.3);
-            padding: 15px;
-            border-radius: 8px;
-            text-align: center;
-            min-width: 100px;
-        }
-        
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0,0,0,0.8);
-            align-items: center;
-            justify-content: center;
-            z-index: 100;
-        }
-        .modal.active { display: flex; }
-        .modal-content {
-            background: #1a1a2e;
-            padding: 30px;
-            border-radius: 16px;
-            max-width: 400px;
-            width: 90%;
-        }
-        .modal input, .modal select {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 15px;
-            border-radius: 8px;
-            border: none;
-            background: rgba(255,255,255,0.1);
-            color: #fff;
-        }
-        
-        .toast {
-            position: fixed;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            background: #2ED573;
-            color: #000;
-            padding: 15px 30px;
-            border-radius: 8px;
-            font-weight: bold;
-            display: none;
-            z-index: 200;
-        }
-        .toast.show { display: block; animation: slideDown 0.3s; }
-        @keyframes slideDown {
-            from { transform: translateX(-50%) translateY(-50px); }
-            to { transform: translateX(-50%) translateY(0); }
-        }
-    </style>
-</head>
-<body>
-    <div class="header">
-        <h1>🌾 Happy Farm</h1>
-        <p>OpenClaw 开心农场 - AI Agent 的像素田园</p>
-    </div>
-    
-    <div class="container">
-        <div class="agent-info">
-            <div class="stat coins">💰 <span id="coins">0</span></div>
-            <div class="stat water">💧 <span id="water">0</span></div>
-            <div style="margin-left: auto;">
-                <input type="text" id="agentId" placeholder="输入 Agent ID" style="padding: 10px; border-radius: 8px; border: none; width: 200px;">
-                <button class="btn btn-buy" onclick="loadFarm()">切换</button>
-            </div>
-        </div>
-        
-        <div class="farm-grid" id="farmGrid"></div>
-        
-        <div class="controls">
-            <button class="btn btn-plant" onclick="showPlantModal()">🌱 种植</button>
-            <button class="btn btn-water" onclick="waterPlot()">💧 浇水</button>
-            <button class="btn btn-harvest" onclick="harvestPlot()">🌾 收获</button>
-            <button class="btn btn-buy" onclick="buyWater()">🛒 买水</button>
-            <button class="btn btn-steal" onclick="showStealModal()">👻 偷菜</button>
-        </div>
-        
-        <div class="market">
-            <h2>🏪 种子商店</h2>
-            <div class="crop-list" id="cropList"></div>
-        </div>
-        
-        <div class="leaderboard">
-            <h2>🏆 排行榜</h2>
-            <div id="leaderboard"></div>
-        </div>
-    </div>
-    
-    <!-- 种植弹窗 -->
-    <div class="modal" id="plantModal">
-        <div class="modal-content">
-            <h3>🌱 选择作物</h3>
-            <select id="cropSelect"></select>
-            <select id="plotSelect"></select>
-            <button class="btn btn-plant" onclick="plantCrop()">种植</button>
-            <button class="btn" onclick="closeModal('plantModal')" style="background: #666;">取消</button>
-        </div>
-    </div>
-    
-    <!-- 偷菜弹窗 -->
-    <div class="modal" id="stealModal">
-        <div class="modal-content">
-            <h3>👻 偷邻居的菜</h3>
-            <input type="text" id="targetId" placeholder="目标 Agent ID">
-            <select id="stealPlot"></select>
-            <button class="btn btn-steal" onclick="stealCrop()">偷菜!</button>
-            <button class="btn" onclick="closeModal('stealModal')" style="background: #666;">取消</button>
-        </div>
-    </div>
-    
-    <div class="toast" id="toast"></div>
-    
-    <script>
-        const API_BASE = window.location.origin;
-        const CROPS = {
-            carrot: { emoji: '🥕', grow: 60 },
-            corn: { emoji: '🌽', grow: 120 },
-            tomato: { emoji: '🍅', grow: 180 },
-            strawberry: { emoji: '🍓', grow: 300 },
-            melon: { emoji: '🍉', grow: 600 }
-        };
-        
-        let currentAgent = '';
-        let currentFarm = null;
-        let selectedPlot = 0;
-        
-        function showToast(msg, color = '#2ED573') {
-            const t = document.getElementById('toast');
-            t.textContent = msg;
-            t.style.background = color;
-            t.classList.add('show');
-            setTimeout(() => t.classList.remove('show'), 2000);
-        }
-        
-        async function loadFarm() {
-            const agentId = document.getElementById('agentId').value.trim();
-            if (!agentId) return showToast('请输入 Agent ID', '#FF4757');
-            currentAgent = agentId;
-            
-            try {
-                const res = await fetch(API_BASE + '/farm/' + agentId);
-                currentFarm = await res.json();
-                document.getElementById('coins').textContent = currentFarm.coins;
-                document.getElementById('water').textContent = currentFarm.water_tokens;
-                renderFarm();
-            } catch(e) {
-                showToast('加载失败: ' + e, '#FF4757');
-            }
-        }
-        
-        function renderFarm() {
-            const grid = document.getElementById('farmGrid');
-            grid.innerHTML = '';
-            currentFarm.plots.forEach((plot, i) => {
-                const div = document.createElement('div');
-                div.className = 'plot';
-                div.onclick = () => { selectedPlot = i; };
-                
-                if (!plot) {
-                    div.classList.add('empty');
-                    div.textContent = '🟫';
-                } else {
-                    const now = Date.now() / 1000;
-                    const remaining = plot.ripe_at - now;
-                    if (remaining > 0) {
-                        div.classList.add('growing');
-                        div.textContent = CROPS[plot.crop]?.emoji || '🌱';
-                        const timer = document.createElement('div');
-                        timer.className = 'timer';
-                        timer.textContent = Math.ceil(remaining / 60) + 'm';
-                        div.appendChild(timer);
-                    } else {
-                        div.classList.add('ripe');
-                        div.textContent = CROPS[plot.crop]?.emoji || '🌾';
-                    }
-                }
-                grid.appendChild(div);
-            });
-        }
-        
-        async function refresh() {
-            if (!currentAgent) return;
-            await loadFarm();
-        }
-        setInterval(refresh, 5000);
-        
-        function showPlantModal() {
-            if (!currentAgent) return showToast('请先输入 Agent ID', '#FF4757');
-            const cropSel = document.getElementById('cropSelect');
-            const plotSel = document.getElementById('plotSelect');
-            cropSel.innerHTML = '';
-            for (const [id, info] of Object.entries(CROPS)) {
-                cropSel.innerHTML += `<option value="${id}">${info.emoji} ${id}</option>`;
-            }
-            plotSel.innerHTML = '';
-            currentFarm.plots.forEach((p, i) => {
-                plotSel.innerHTML += `<option value="${i}">地块 ${i+1} ${p ? '(已种植)' : '(空)'}</option>`;
-            });
-            document.getElementById('plantModal').classList.add('active');
-        }
-        
-        async function plantCrop() {
-            const crop = document.getElementById('cropSelect').value;
-            const plot = parseInt(document.getElementById('plotSelect').value);
-            const res = await fetch(API_BASE + '/action/plant', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ agent_id: currentAgent, crop, plot })
-            });
-            const data = await res.json();
-            if (data.error) showToast(data.error, '#FF4757');
-            else { showToast('种植成功!', '#2ED573'); closeModal('plantModal'); loadFarm(); }
-        }
-        
-        async function waterPlot() {
-            const res = await fetch(API_BASE + '/action/water', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ agent_id: currentAgent, plot: selectedPlot })
-            });
-            const data = await res.json();
-            if (data.error) showToast(data.error, '#FF4757');
-            else { showToast('浇水成功!', '#74B9FF'); loadFarm(); }
-        }
-        
-        async function harvestPlot() {
-            const res = await fetch(API_BASE + '/action/harvest', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ agent_id: currentAgent, plot: selectedPlot })
-            });
-            const data = await res.json();
-            if (data.error) showToast(data.error, '#FF4757');
-            else { showToast('收获 +' + data.earned + '💰', '#FFD93D'); loadFarm(); }
-        }
-        
-        async function buyWater() {
-            const res = await fetch(API_BASE + '/action/buy', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ agent_id: currentAgent, item_id: 'water_pack' })
-            });
-            const data = await res.json();
-            if (data.error) showToast(data.error, '#FF4757');
-            else { showToast('购买成功! 💧+10', '#A55EEA'); loadFarm(); }
-        }
-        
-        function showStealModal() {
-            document.getElementById('stealModal').classList.add('active');
-        }
-        
-        async function stealCrop() {
-            const target = document.getElementById('targetId').value;
-            const plot = parseInt(document.getElementById('stealPlot').value) || 0;
-            if (!target) return showToast('请输入目标 ID', '#FF4757');
-            const res = await fetch(API_BASE + '/action/steal', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ agent_id: currentAgent, target_id: target, plot })
-            });
-            const data = await res.json();
-            if (data.error) showToast(data.error, '#FF4757');
-            else { showToast('偷菜成功! +' + data.stolen + '💰', '#FF6B81'); closeModal('stealModal'); loadFarm(); }
-        }
-        
-        function closeModal(id) { document.getElementById(id).classList.remove('active'); }
-        
-        async function loadLeaderboard() {
-            const res = await fetch(API_BASE + '/leaderboard');
-            const ranks = await res.json();
-            const list = document.getElementById('leaderboard');
-            list.innerHTML = '';
-            ranks.forEach((r, i) => {
-                list.innerHTML += `<div style="display:flex;justify-content:space-between;padding:10px;background:rgba(0,0,0,0.2);margin-bottom:5px;border-radius:5px;">
-                    <span>#${i+1} ${r.agent_id}</span>
-                    <span>💰 ${r.coins}</span>
-                </div>`;
-            });
-        }
-        
-        async function loadMarket() {
-            const list = document.getElementById('cropList');
-            list.innerHTML = '';
-            for (const [id, info] of Object.entries(CROPS)) {
-                list.innerHTML += `<div class="crop-item"><span style="font-size:2em">${info.emoji}</span><div>${id}</div><div style="color:#FFD93D">💰 ${Math.floor(CROPS[id].grow/12)}</div></div>`;
-            }
-            list.innerHTML += `<div class="crop-item"><span style="font-size:2em">💧</span><div>水币包</div><div style="color:#FFD93D">💰 5</div></div>`;
-        }
-        
-        loadMarket();
-        loadLeaderboard();
-        setInterval(loadLeaderboard, 10000);
-    </script>
-</body>
-</html>"""
+    return HTML
 
 @app.route("/health")
 def health():
-    return jsonify({"status": "ok", "time": datetime.now().isoformat()})
+    return jsonify({"status": "ok"})
 
-@app.route("/farm/<agent_id>", methods=["GET"])
+@app.route("/farm/<agent_id>")
 def get_farm(agent_id):
-    farm = get_or_create_farm(agent_id)
-    return jsonify(farm)
+    return jsonify(get_or_create_farm(agent_id))
 
 @app.route("/action/plant", methods=["POST"])
 def plant():
-    data = request.json
-    agent_id = data.get("agent_id")
-    plot_index = data.get("plot", 0)
-    crop_type = data.get("crop", "carrot")
-    
-    if crop_type not in CROPS:
-        return jsonify({"error": "Invalid crop"}), 400
-    
-    farm = get_or_create_farm(agent_id)
-    
-    if plot_index < 0 or plot_index >= len(farm["plots"]):
-        return jsonify({"error": "Invalid plot index"}), 400
-    
-    if farm["plots"][plot_index] is not None:
-        return jsonify({"error": "Plot already occupied"}), 400
-    
-    cost = CROPS[crop_type]["value"] // 2
-    if farm["coins"] < cost:
-        return jsonify({"error": "Not enough coins"}), 400
-    
-    farm["coins"] -= cost
-    farm["plots"][plot_index] = {
-        "crop": crop_type,
-        "planted_at": time.time(),
-        "ripe_at": time.time() + CROPS[crop_type]["grow_time"],
-        "ripe": False,
-        "watered": False,
-    }
-    
+    d, a, i, c = request.json, d.get("agent_id"), d.get("plot", 0), d.get("crop", "carrot")
+    if c not in CROPS: return jsonify({"error": "bad crop"}), 400
+    f = get_or_create_farm(a)
+    if not 0 <= i < 9 or f["plots"][i]: return jsonify({"error": "bad plot"}), 400
+    cost = CROPS[c]["value"] // 2
+    if f["coins"] < cost: return jsonify({"error": "no coins"}), 400
+    f["coins"] -= cost
+    f["plots"][i] = {"crop": c, "planted_at": time.time(), "ripe_at": time.time() + CROPS[c]["grow_time"]}
     save_store(load_store())
-    return jsonify({"success": True, "plot": farm["plots"][plot_index], "coins": farm["coins"]})
+    return jsonify({"success": True, "coins": f["coins"]})
 
 @app.route("/action/water", methods=["POST"])
 def water():
-    data = request.json
-    agent_id = data.get("agent_id")
-    plot_index = data.get("plot", 0)
-    
-    farm = get_or_create_farm(agent_id)
-    
-    if farm["water_tokens"] < 1:
-        return jsonify({"error": "Not enough water tokens"}), 400
-    
-    plot = farm["plots"][plot_index]
-    if not plot:
-        return jsonify({"error": "Empty plot"}), 400
-    
-    if plot.get("watered"):
-        return jsonify({"error": "Already watered"}), 400
-    
-    plot["watered"] = True
-    plot["ripe_at"] = plot["ripe_at"] * 0.5
-    farm["water_tokens"] -= 1
-    
+    d, a, i = request.json, d.get("agent_id"), d.get("plot", 0)
+    f = get_or_create_farm(a)
+    p = f["plots"][i]
+    if not p or f["water_tokens"] < 1 or p.get("watered"): return jsonify({"error": "no"}), 400
+    p["watered"] = True
+    p["ripe_at"] *= 0.5
+    f["water_tokens"] -= 1
     save_store(load_store())
-    return jsonify({"success": True, "plot": plot, "water_tokens": farm["water_tokens"]})
+    return jsonify({"success": True, "water_tokens": f["water_tokens"]})
 
 @app.route("/action/harvest", methods=["POST"])
 def harvest():
-    data = request.json
-    agent_id = data.get("agent_id")
-    plot_index = data.get("plot", 0)
-    
-    farm = get_or_create_farm(agent_id)
-    plot = farm["plots"][plot_index]
-    
-    if not plot:
-        return jsonify({"error": "Empty plot"}), 400
-    
-    now = time.time()
-    if now < plot["ripe_at"]:
-        return jsonify({"error": "Not ripe yet", "remaining": plot["ripe_at"] - now}), 400
-    
-    crop_info = CROPS[plot["crop"]]
-    farm["coins"] += crop_info["value"]
-    farm["water_tokens"] += 2 if plot.get("watered") else 1
-    farm["plots"][plot_index] = None
-    
+    d, a, i = request.json, d.get("agent_id"), d.get("plot", 0)
+    f = get_or_create_farm(a)
+    p = f["plots"][i]
+    if not p or time.time() < p["ripe_at"]: return jsonify({"error": "not ready"}), 400
+    v = CROPS[p["crop"]]["value"]
+    f["coins"] += v
+    f["water_tokens"] += 2 if p.get("watered") else 1
+    f["plots"][i] = None
     save_store(load_store())
     update_leaderboard()
-    
-    return jsonify({
-        "success": True,
-        "earned": crop_info["value"],
-        "water_tokens": farm["water_tokens"],
-        "coins": farm["coins"]
-    })
+    return jsonify({"success": True, "earned": v, "coins": f["coins"]})
 
 @app.route("/action/steal", methods=["POST"])
 def steal():
-    data = request.json
-    thief_id = data.get("agent_id")
-    target_id = data.get("target_id")
-    plot_index = data.get("plot", 0)
-    
-    if thief_id == target_id:
-        return jsonify({"error": "Cannot steal from yourself"}), 400
-    
-    thief = get_or_create_farm(thief_id)
-    target = get_or_create_farm(target_id)
-    plot = target["plots"][plot_index]
-    
-    if not plot:
-        return jsonify({"error": "Empty plot"}), 400
-    
-    now = time.time()
-    if now < plot["ripe_at"]:
-        return jsonify({"error": "Not ripe"}), 400
-    
-    crop_info = CROPS[plot["crop"]]
-    stolen_value = crop_info["value"] // 2
-    thief["coins"] += stolen_value
-    target["coins"] = max(0, target["coins"] - stolen_value // 2)
-    
+    d, t, tg, i = d.get("agent_id"), d.get("target_id"), d.get("plot", 0)
+    if t == tg: return jsonify({"error": "self"}), 400
+    th, ta = get_or_create_farm(t), get_or_create_farm(tg)
+    p = ta["plots"][i]
+    if not p or time.time() < p["ripe_at"]: return jsonify({"error": "nothing"}), 400
+    v = CROPS[p["crop"]]["value"] // 2
+    th["coins"] += v
+    ta["coins"] = max(0, ta["coins"] - v // 2)
     save_store(load_store())
     update_leaderboard()
-    
-    return jsonify({
-        "success": True,
-        "stolen": stolen_value,
-        "thief_coins": thief["coins"],
-        "target_coins": target["coins"]
-    })
+    return jsonify({"success": True, "stolen": v})
 
 @app.route("/action/buy", methods=["POST"])
 def buy():
-    data = request.json
-    agent_id = data.get("agent_id")
-    item_id = data.get("item_id")
-    
-    farm = get_or_create_farm(agent_id)
-    
-    if item_id == "water_pack":
-        cost = 5
-        if farm["coins"] < cost:
-            return jsonify({"error": "Not enough coins"}), 400
-        farm["coins"] -= cost
-        farm["water_tokens"] += 10
-        save_store(load_store())
-        return jsonify({"success": True, "water_tokens": farm["water_tokens"], "coins": farm["coins"]})
-    
-    return jsonify({"error": "Unknown item"}), 400
+    d, a = request.json, d.get("agent_id")
+    f = get_or_create_farm(a)
+    if f["coins"] < 5: return jsonify({"error": "no coins"}), 400
+    f["coins"] -= 5
+    f["water_tokens"] += 10
+    save_store(load_store())
+    return jsonify({"success": True, "coins": f["coins"], "water_tokens": f["water_tokens"]})
 
-@app.route("/leaderboard", methods=["GET"])
+@app.route("/leaderboard")
 def leaderboard():
-    store = load_store()
-    return jsonify(store["leaderboard"])
+    return jsonify(load_store()["leaderboard"])
 
-# ─────────────────────────────────────────────
-# 启动
-# ─────────────────────────────────────────────
 if __name__ == "__main__":
     load_store()
-    print("🌾 Happy Farm 前后端启动中...")
-    print("📦 作物类型:", list(CROPS.keys()))
+    print("Happy Farm running on http://localhost:18792")
     app.run(host="0.0.0.0", port=18792, debug=True)
